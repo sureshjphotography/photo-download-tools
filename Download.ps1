@@ -65,6 +65,42 @@ if (-not $rclone) {
 Write-Host ""
 
 if (-not (Test-Path $dest)) { New-Item -ItemType Directory -Force -Path $dest | Out-Null }
+
+# ---- check there is room BEFORE downloading ----
+Write-Host "  Checking how big this job is..." -ForegroundColor Cyan
+$need = 0
+try {
+  $sizeUrl = ($link -replace 'raw/$','') + "size.json"
+  $ProgressPreference = "SilentlyContinue"
+  $sz = (Invoke-WebRequest $sizeUrl -UseBasicParsing -TimeoutSec 25).Content
+  $m = [regex]::Match($sz, '"bytes"\s*:\s*(\d+)')
+  if ($m.Success) { $need = [long]$m.Groups[1].Value }
+} catch {}
+if ($need -gt 0) {
+  $free = 0
+  try { $free = ([System.IO.DriveInfo]::new((Get-Item -LiteralPath $dest).Root.FullName)).AvailableFreeSpace } catch {}
+  Write-Host ("  This job needs {0:N1} GB.  That drive has {1:N1} GB free." -f ($need/1GB), ($free/1GB))
+  Write-Host ""
+  if ($free -gt 0 -and $free -lt $need) {
+    Write-Host "  ****************************************************" -ForegroundColor Red
+    Write-Host ("   NOT ENOUGH SPACE in $dest") -ForegroundColor Red
+    Write-Host ("   Needs {0:N1} GB, only {1:N1} GB free." -f ($need/1GB), ($free/1GB)) -ForegroundColor Red
+    Write-Host "  ****************************************************" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "  Drives on this computer, and their free space:" -ForegroundColor Yellow
+    foreach ($d in ([System.IO.DriveInfo]::GetDrives() | Where-Object { $_.IsReady -and $_.DriveType -ne 'CDRom' })) {
+      $mark = if ($d.AvailableFreeSpace -ge $need) { "  <-- this one fits" } else { "" }
+      Write-Host ("    {0,-6} {1,8:N0} GB free{2}" -f $d.Name, ($d.AvailableFreeSpace/1GB), $mark)
+    }
+    Write-Host ""
+    Write-Host "  To use one of those, open config.txt and set for example:" -ForegroundColor Yellow
+    Write-Host "    DESTINATION=E:\Jobs" -ForegroundColor Yellow
+    Write-Host ""
+    $ans = Read-Host "  Continue anyway? (y/n)"
+    if ("$ans".Trim() -notmatch '^[Yy]') { Write-Host ""; Write-Host "  Stopped. Nothing downloaded."; Write-Host ""; Read-Host "  Press Enter to close" | Out-Null; exit 0 }
+    Write-Host ""
+  }
+}
 $logDir = Join-Path $here "logs"
 if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Force -Path $logDir | Out-Null }
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"

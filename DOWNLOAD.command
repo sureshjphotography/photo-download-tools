@@ -70,6 +70,45 @@ echo ""
 
 mkdir -p "$DESTINATION" || fail "Cannot create $DESTINATION"
 mkdir -p logs
+
+# ---- check there is room BEFORE downloading ----
+echo "  Checking how big this job is..."
+SIZEURL="${LINK%raw/}size.json"
+NEED=$(curl -fsSL --max-time 25 "$SIZEURL" 2>/dev/null | tr -d ' ' | sed -n 's/.*"bytes":\([0-9]*\).*/\1/p')
+if [ -n "$NEED" ] && [ "$NEED" -gt 0 ]; then
+  FREE=$(df -Pk "$DESTINATION" 2>/dev/null | awk 'NR==2{print $4}')
+  FREE=$((FREE * 1024))
+  NEEDG=$(echo "$NEED" | awk '{printf "%.1f", $1/1073741824}')
+  FREEG=$(echo "$FREE" | awk '{printf "%.1f", $1/1073741824}')
+  echo "  This job needs ${NEEDG} GB.  That folder has ${FREEG} GB free."
+  echo ""
+  if [ "$FREE" -lt "$NEED" ]; then
+    echo "  ****************************************************"
+    echo "   NOT ENOUGH SPACE in $DESTINATION"
+    echo "   Needs ${NEEDG} GB, only ${FREEG} GB free."
+    echo "  ****************************************************"
+    echo ""
+    if [ -d /Volumes ]; then
+      echo "  Drives connected to this Mac, and their free space:"
+      for v in /Volumes/*; do
+        [ -d "$v" ] || continue
+        f=$(df -Pk "$v" 2>/dev/null | awk 'NR==2{print $4}')
+        [ -n "$f" ] || continue
+        g=$(echo "$f" | awk '{printf "%.0f", $1/1048576}')
+        if [ "$((f * 1024))" -ge "$NEED" ]; then mark="  <-- this one fits"; else mark=""; fi
+        printf "    %-38s %6s GB free%s\n" "$v" "$g" "$mark"
+      done
+      echo ""
+      echo "  To use one of those, open config.txt and set for example:"
+      echo "    DESTINATION=/Volumes/YourDrive/Jobs"
+      echo ""
+    fi
+    printf "  Continue anyway? (y/n) "
+    read -r ANSWER
+    case "$ANSWER" in [Yy]*) ;; *) echo ""; echo "  Stopped. Nothing downloaded."; echo ""; read -r -p "  Press Enter to close "; exit 0 ;; esac
+    echo ""
+  fi
+fi
 STAMP="$(date +%Y%m%d-%H%M%S)"
 
 echo "  Downloading... you can stop and re-run this any time, it resumes."
