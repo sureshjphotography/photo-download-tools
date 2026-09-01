@@ -1,0 +1,10 @@
+# ---- CHANGE THIS LINE to where you want the photos ----
+# Mac example:      DESTINATION=~/Photos/JobName
+# Windows example:  DESTINATION=D:\JobName
+DESTINATION=~/Downloads/Photos-from-Suresh
+
+# ---- Your private link. Suresh gives you this per job. ----
+LINK=https://download.sureshjweddingphotography.com/YOUR-LINK-HERE/raw/
+
+# How many files to pull at once. 4 is safe. 8 if your internet is fast.
+TRANSFERS=4

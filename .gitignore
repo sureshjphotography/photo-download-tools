@@ -1,0 +1,6 @@
+config.txt
+logs/
+rclone
+rclone.exe
+verify-result.txt
+*.zip
