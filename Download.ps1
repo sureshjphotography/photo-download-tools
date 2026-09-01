@@ -23,6 +23,17 @@ if (-not $dest) { Fail "ERROR: config.txt is missing the DESTINATION line." }
 if (-not $link) { Fail "ERROR: config.txt is missing the LINK line." }
 if (-not $link.EndsWith("/")) { $link += "/" }
 
+# a Mac/Linux path in config is no use here - expand ~ or fall back
+if ($dest -like "~*") { $dest = $dest -replace '^~', $HOME }
+if ($dest -match '^/') {
+  $dest = Join-Path $HOME "Downloads\Photos-from-Suresh"
+  Write-Host "  No Windows folder set in config.txt, so using:" -ForegroundColor Yellow
+  Write-Host "    $dest" -ForegroundColor Yellow
+  Write-Host "  (edit the DESTINATION line in config.txt to change it)" -ForegroundColor Yellow
+  Write-Host ""
+}
+$dest = $dest -replace '/','\'
+
 Write-Host "  Saving to : $dest"
 Write-Host "  At a time : $tr files"
 Write-Host ""
