@@ -1,4 +1,7 @@
 $ErrorActionPreference = "Continue"
+# SureshJ Photography - check your files against Suresh's list (Windows)
+# 21 Sep 2026: checks against the LIVE list on the server; falls back to the
+# MANIFEST.txt in the zip when offline or the link has expired.
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $here
 Write-Host ""
@@ -6,16 +9,39 @@ Write-Host "  Checking your files against Suresh's list" -ForegroundColor Cyan
 Write-Host "  ========================================" -ForegroundColor Cyan
 Write-Host ""
 function Fail($m){ Write-Host ""; Write-Host "  $m" -ForegroundColor Red; Write-Host ""; Read-Host "  Press Enter to close" | Out-Null; exit 1 }
-if (-not (Test-Path "MANIFEST.txt")) { Fail "ERROR: MANIFEST.txt is not next to this file." }
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+$ProgressPreference = "SilentlyContinue"
 
-$dest = ""
+$dest = ""; $link = ""
 if (Test-Path "config.txt") {
   foreach ($line in Get-Content "config.txt") {
     $t = $line.Trim(); if ($t -eq "" -or $t.StartsWith("#")) { continue }
     $i = $t.IndexOf("="); if ($i -le 0) { continue }
-    if ($t.Substring(0,$i).Trim().ToUpper() -eq "DESTINATION") { $dest = $t.Substring($i+1).Trim() }
+    $k = $t.Substring(0,$i).Trim().ToUpper(); $v = $t.Substring($i+1).Trim()
+    if ($k -eq "DESTINATION") { $dest = $v }
+    if ($k -eq "LINK") { $link = $v }
   }
 }
+
+$srcName = "the list in your zip"
+if ($link) {
+  if (-not $link.EndsWith("/")) { $link += "/" }
+  try {
+    $mt = (Invoke-WebRequest (($link -replace 'raw/$','') + "manifest.txt") -UseBasicParsing -TimeoutSec 60 -ErrorAction Stop).Content
+    if ($mt -is [byte[]]) { $mt = [Text.Encoding]::UTF8.GetString($mt) }
+    if ($mt -match '(?m)^# Files: ') {
+      [IO.File]::WriteAllText((Join-Path $here "MANIFEST.txt"), $mt, (New-Object Text.UTF8Encoding($false)))
+      $srcName = "Suresh's current list"
+    }
+  } catch {
+    if ($_.Exception.Response -and [int]$_.Exception.Response.StatusCode -eq 410) {
+      Write-Host "  (Your link has expired - checking against the list in your zip.)" -ForegroundColor Yellow
+      Write-Host ""
+    }
+  }
+}
+if (-not (Test-Path "MANIFEST.txt")) { Fail "ERROR: MANIFEST.txt is not next to this file." }
+
 if ($dest -like "~*") { $dest = $dest -replace '^~', $HOME }
 if ($dest -match '^/') { $dest = "" }
 $dest = $dest -replace '/','\'
@@ -31,8 +57,9 @@ $job   = ($man | Where-Object { $_ -like '# Job: *' }   | Select-Object -First 1
 $wantN = [long](($man | Where-Object { $_ -like '# Files: *' } | Select-Object -First 1) -replace '^# Files: ','')
 $wantB = [long](($man | Where-Object { $_ -like '# Bytes: *' } | Select-Object -First 1) -replace '^# Bytes: ','')
 
-Write-Host "  Job    : $job"
-Write-Host "  Folder : $dest"
+Write-Host "  Job     : $job"
+Write-Host "  Folder  : $dest"
+Write-Host "  Against : $srcName"
 Write-Host ""
 Write-Host "  Reading your files..." -ForegroundColor DarkGray
 
@@ -44,12 +71,11 @@ foreach ($line in $man) {
   $parts = $line -split "`t", 2
   if ($parts.Count -lt 2) { continue }
   $size = [long]$parts[0]
-  $rel  = $parts[1] -replace '/','\'
-  $f = Join-Path $dest $rel
-  if (-not (Test-Path -LiteralPath $f)) { $missing.Add($parts[1]); continue }
-  $actual = (Get-Item -LiteralPath $f).Length
-  if ($actual -ne $size) { $wrong.Add("$($parts[1]) (expected $size bytes, has $actual)") }
-  else { $haveN++; $haveB += $actual }
+  $f = Join-Path $dest ($parts[1] -replace '/','\')
+  $fi = Get-Item -LiteralPath $f -ErrorAction SilentlyContinue
+  if (-not $fi) { $missing.Add($parts[1]); continue }
+  if ($fi.Length -ne $size) { $wrong.Add("$($parts[1]) (expected $size bytes, has $($fi.Length))") }
+  else { $haveN++; $haveB += $fi.Length }
 }
 
 $gb = { param($b) "{0:N1}" -f ($b/1GB) }
@@ -57,7 +83,7 @@ $out = New-Object System.Collections.Generic.List[string]
 $out.Add("RESULT - SureshJ Photography")
 $out.Add("Job     : $job")
 $out.Add("Folder  : $dest")
-$out.Add("Checked : $(Get-Date -f 'yyyy-MM-dd HH:mm')")
+$out.Add("Checked : $(Get-Date -f 'yyyy-MM-dd HH:mm')  against $srcName")
 $out.Add("")
 $out.Add("Suresh sent : $wantN files   $(& $gb $wantB) GB")
 $out.Add("You have    : $haveN files   $(& $gb $haveB) GB")
@@ -65,7 +91,7 @@ $out.Add("")
 if ($missing.Count -eq 0 -and $wrong.Count -eq 0) {
   $out.Add("COMPLETE - every file is present and the right size.")
 } else {
-  $out.Add("NOT COMPLETE")
+  $out.Add("NOT COMPLETE - run DOWNLOAD again, it carries on from where it stopped.")
   if ($missing.Count -gt 0) { $out.Add("  $($missing.Count) file(s) missing") }
   if ($wrong.Count -gt 0)   { $out.Add("  $($wrong.Count) file(s) the wrong size (download did not finish)") }
   $out.Add("")
@@ -81,19 +107,9 @@ if ($missing.Count -eq 0 -and $wrong.Count -eq 0) {
 }
 $out | Out-File -LiteralPath (Join-Path $here "RESULT.txt") -Encoding utf8
 
-# tell Suresh automatically (best effort - RESULT.txt is still the fallback)
 $sent = $false
-$link = ""
-if (Test-Path "config.txt") {
-  foreach ($line in Get-Content "config.txt") {
-    $t = $line.Trim(); if ($t -eq "" -or $t.StartsWith("#")) { continue }
-    $i = $t.IndexOf("="); if ($i -le 0) { continue }
-    if ($t.Substring(0,$i).Trim().ToUpper() -eq "LINK") { $link = $t.Substring($i+1).Trim() }
-  }
-}
 if ($link) {
   try {
-    $confirmUrl = ($link -replace 'raw/$','') + "confirm"
     $payload = @{
       complete      = ($missing.Count -eq 0 -and $wrong.Count -eq 0)
       files         = $haveN
@@ -104,8 +120,7 @@ if ($link) {
       wrongSize     = $wrong.Count
       folder        = "$dest"
     } | ConvertTo-Json -Compress
-    $ProgressPreference = "SilentlyContinue"
-    Invoke-RestMethod -Uri $confirmUrl -Method Post -Body $payload -ContentType "application/json" -TimeoutSec 20 | Out-Null
+    Invoke-RestMethod -Uri (($link -replace 'raw/$','') + "confirm") -Method Post -Body $payload -ContentType "application/json" -TimeoutSec 20 | Out-Null
     $sent = $true
   } catch {}
 }
@@ -117,7 +132,6 @@ Write-Host ""
 Write-Host "  ============================================" -ForegroundColor Cyan
 if ($sent) {
   Write-Host "   Done. Suresh already has this result." -ForegroundColor Green
-  Write-Host "   (RESULT.txt is also in this folder if he asks for it.)"
 } else {
   Write-Host "   A file called RESULT.txt is now in this folder."
   Write-Host "   Please send RESULT.txt to Suresh." -ForegroundColor Yellow
