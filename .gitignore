@@ -4,3 +4,4 @@ rclone
 rclone.exe
 verify-result.txt
 *.zip
+_backup-*/
